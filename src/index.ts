@@ -4,8 +4,8 @@ import {Language, LanguageSupport, LanguageDescription} from "@codemirror/langua
 import {MarkdownExtension, MarkdownParser, parseCode} from "@lezer/markdown"
 import {html} from "@codemirror/lang-html"
 import {commonmarkLanguage, markdownLanguage, mkLang, getCodeParser} from "./markdown"
-import {insertNewlineContinueMarkup, deleteMarkupBackward} from "./commands"
-export {commonmarkLanguage, markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward}
+import {insertNewlineContinueMarkup} from "./commands"
+export {commonmarkLanguage, markdownLanguage, insertNewlineContinueMarkup}
 
 /// A small keymap with Markdown-specific bindings. Binds Enter to
 /// [`insertNewlineContinueMarkup`](#lang-markdown.insertNewlineContinueMarkup)
@@ -13,7 +13,6 @@ export {commonmarkLanguage, markdownLanguage, insertNewlineContinueMarkup, delet
 /// [`deleteMarkupBackward`](#lang-markdown.deleteMarkupBackward).
 export const markdownKeymap: readonly KeyBinding[] = [
   {key: "Enter", run: insertNewlineContinueMarkup},
-  {key: "Backspace", run: deleteMarkupBackward}
 ]
 
 const htmlNoMatch = html({matchClosingTags: false})

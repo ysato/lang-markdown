@@ -1,6 +1,6 @@
-import {StateCommand, Text, EditorSelection, ChangeSpec} from "@codemirror/state"
+import {ChangeSpec, EditorSelection, StateCommand, Text} from "@codemirror/state"
 import {syntaxTree} from "@codemirror/language"
-import {SyntaxNode, Tree} from "@lezer/common"
+import {SyntaxNode} from "@lezer/common"
 import {markdownLanguage} from "./markdown"
 
 class Context {
@@ -15,7 +15,7 @@ class Context {
   ) {}
 
   blank(maxWidth: number | null, trailing = true) {
-    let result = this.spaceBefore + (this.node.name == "Blockquote" ? ">" : "")
+    let result = this.spaceBefore
     if (maxWidth != null) {
       while (result.length < maxWidth) result += " "
       return result
@@ -26,7 +26,7 @@ class Context {
   }
 
   marker(doc: Text, add: number) {
-    let number = this.node.name == "OrderedList" ? String((+itemNumber(this.item!, doc)[2] + add)) : ""
+    let number = this.node.name == "OrderedList" ? '1' : ""
     return this.spaceBefore + number + this.type + this.spaceAfter
   }
 }
@@ -34,18 +34,14 @@ class Context {
 function getContext(node: SyntaxNode, doc: Text) {
   let nodes = []
   for (let cur: SyntaxNode | null = node; cur && cur.name != "Document"; cur = cur.parent) {
-    if (cur.name == "ListItem" || cur.name == "Blockquote" || cur.name == "FencedCode")
+    if (cur.name == "ListItem")
       nodes.push(cur)
   }
   let context = []
   for (let i = nodes.length - 1; i >= 0; i--) {
     let node = nodes[i], match
     let line = doc.lineAt(node.from), startPos = node.from - line.from
-    if (node.name == "FencedCode") {
-      context.push(new Context(node, startPos, startPos, "", "", "", null))
-    } else if (node.name == "Blockquote" && (match = /^[ \t]*>( ?)/.exec(line.text.slice(startPos)))) {
-      context.push(new Context(node, startPos, startPos + match[0].length, "", match[1], ">", null))
-    } else if (node.name == "ListItem" && node.parent!.name == "OrderedList" &&
+    if (node.name == "ListItem" && node.parent!.name == "OrderedList" &&
                (match = /^([ \t]*)\d+([.)])([ \t]*)/.exec(line.text.slice(startPos)))) {
       let after = match[3], len = match[0].length
       if (after.length >= 4) { after = after.slice(0, after.length - 4); len -= 4 }
@@ -60,27 +56,6 @@ function getContext(node: SyntaxNode, doc: Text) {
     }
   }
   return context
-}
-
-function itemNumber(item: SyntaxNode, doc: Text) {
-  return /^(\s*)(\d+)(?=[.)])/.exec(doc.sliceString(item.from, item.from + 10))!
-}
-
-function renumberList(after: SyntaxNode, doc: Text, changes: ChangeSpec[], offset = 0) {
-  for (let prev = -1, node = after;;) {
-    if (node.name == "ListItem") {
-      let m = itemNumber(node, doc)
-      let number = +m[2]
-      if (prev >= 0) {
-        if (number != prev + 1) return
-        changes.push({from: node.from + m[1].length, to: node.from + m[0].length, insert: String(prev + 2 + offset)})
-      }
-      prev = number
-    }
-    let next = node.nextSibling
-    if (!next) break
-    node = next
-  }
 }
 
 /// This command, when invoked in Markdown context with cursor
@@ -118,31 +93,17 @@ export const insertNewlineContinueMarkup: StateCommand = ({state, dispatch}) => 
           delTo = line.from + (next ? next.to : 0)
         }
         let changes: ChangeSpec[] = [{from: delTo, to: pos, insert}]
-        if (inner.node.name == "OrderedList") renumberList(inner.item!, doc, changes, -2)
-        if (next && next.node.name == "OrderedList") renumberList(next.item!, doc, changes)
         return {range: EditorSelection.cursor(delTo + insert.length), changes}
       } else { // Move this line down
-        let insert = ""
-        for (let i = 0, e = context.length - 2; i <= e; i++) {
-          insert += context[i].blank(i < e ? context[i + 1].from - insert.length : null, i < e)
-        }
-        insert += state.lineBreak
-        return {range: EditorSelection.cursor(pos + insert.length), changes: {from: line.from, insert}}
-      }
-    }
-
-    if (inner.node.name == "Blockquote" && emptyLine && line.from) {
-      let prevLine = doc.lineAt(line.from - 1), quoted = />\s*$/.exec(prevLine.text)
-      // Two aligned empty quoted lines in a row
-      if (quoted && quoted.index == inner.from) {
-        let changes = state.changes([{from: prevLine.from + quoted.index, to: prevLine.to},
-                                     {from: line.from + inner.from, to: line.to}])
-        return {range: range.map(changes), changes}
+        let insert = state.lineBreak;
+        return {
+          range: EditorSelection.cursor(line.from + insert.length),
+          changes: [{ from: line.from, to: line.to, insert }]
+        };
       }
     }
 
     let changes: ChangeSpec[] = []
-    if (inner.node.name == "OrderedList") renumberList(inner.item!, doc, changes)
     let continued = inner.item && inner.item.from < line.from
     let insert = ""
     // If not dedented
@@ -160,73 +121,5 @@ export const insertNewlineContinueMarkup: StateCommand = ({state, dispatch}) => 
   })
   if (dont) return false
   dispatch(state.update(changes, {scrollIntoView: true, userEvent: "input"}))
-  return true
-}
-
-function isMark(node: SyntaxNode) {
-  return node.name == "QuoteMark" || node.name == "ListMark"
-}
-
-function contextNodeForDelete(tree: Tree, pos: number) {
-  let node = tree.resolveInner(pos, -1), scan = pos
-  if (isMark(node)) {
-    scan = node.from
-    node = node.parent!
-  }
-  for (let prev; prev = node.childBefore(scan);) {
-    if (isMark(prev)) {
-      scan = prev.from
-    } else if (prev.name == "OrderedList" || prev.name == "BulletList") {
-      node = prev.lastChild!
-      scan = node.to
-    } else {
-      break
-    }
-  }
-  return node
-}
-
-/// This command will, when invoked in a Markdown context with the
-/// cursor directly after list or blockquote markup, delete one level
-/// of markup. When the markup is for a list, it will be replaced by
-/// spaces on the first invocation (a further invocation will delete
-/// the spaces), to make it easy to continue a list.
-///
-/// When not after Markdown block markup, this command will return
-/// false, so it is intended to be bound alongside other deletion
-/// commands, with a higher precedence than the more generic commands.
-export const deleteMarkupBackward: StateCommand = ({state, dispatch}) => {
-  let tree = syntaxTree(state)
-  let dont = null, changes = state.changeByRange(range => {
-    let pos = range.from, {doc} = state
-    if (range.empty && markdownLanguage.isActiveAt(state, range.from)) {
-      let line = doc.lineAt(pos)
-      let context = getContext(contextNodeForDelete(tree, pos), doc)
-      if (context.length) {
-        let inner = context[context.length - 1]
-        let spaceEnd = inner.to - inner.spaceAfter.length + (inner.spaceAfter ? 1 : 0)
-        // Delete extra trailing space after markup
-        if (pos - line.from > spaceEnd && !/\S/.test(line.text.slice(spaceEnd, pos - line.from)))
-          return {range: EditorSelection.cursor(line.from + spaceEnd),
-                  changes: {from: line.from + spaceEnd, to: pos}}
-        if (pos - line.from == spaceEnd &&
-            // Only apply this if we're on the line that has the
-            // construct's syntax, or there's only indentation in the
-            // target range
-            (!inner.item || line.from <= inner.item.from || !/\S/.test(line.text.slice(0, inner.to)))) {
-          let start = line.from + inner.from
-          // Replace a list item marker with blank space
-          if (inner.item && inner.node.from < inner.item.from && /\S/.test(line.text.slice(inner.from, inner.to)))
-            return {range, changes: {from: start, to: line.from + inner.to, insert: inner.blank(inner.to - inner.from)}}
-          // Delete one level of indentation
-          if (start < pos)
-            return {range: EditorSelection.cursor(start), changes: {from: start, to: pos}}
-        }
-      }
-    }
-    return dont = {range}
-  })
-  if (dont) return false
-  dispatch(state.update(changes, {scrollIntoView: true, userEvent: "delete"}))
   return true
 }
